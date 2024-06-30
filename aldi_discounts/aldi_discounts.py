@@ -1,5 +1,6 @@
 import re
 import time
+import json
 from datetime import timedelta, date
 
 import requests
@@ -11,6 +12,8 @@ class Product:
   def __init__(self):
     self._name = ""
     self._price = ""
+    #self._price_base = ""
+    #self._price_base_unit = ""
     self._price_before = ""
     self._producer = ""
     self._description = ""
@@ -83,6 +86,91 @@ class Product:
   def link(self, link):
     self._link = link  
 
+class Aldi_nord:
+  
+  @staticmethod
+  def _get_and_parse_product(url: str) -> Product:
+    res = requests.get(url)
+    if res.status_code != 200:
+      print("problem with the product link.")
+      return None
+    parsed = BeautifulSoup(res.text, "html.parser")
+    new_product = Product()
+    # describition
+    desc_raw = parsed.find("script", {"type":"application/ld+json"}).string
+    desc_raw = json.loads(desc_raw)
+    desc = desc_raw.get("description")
+    desc = re.sub(r"(\r|\n|\xa0)", "", desc)  # .replace("\xa0", "")
+    new_product.description = desc
+    # valid from
+    valid_from_raw = parsed.find(lambda tag: tag.name == "div" and tag.has_attr("data-promotion-date-millis"))
+    valid_from_timestamp = valid_from_raw.get("data-promotion-date-millis")
+    valid_from = date.fromtimestamp(int(valid_from_timestamp[:-3]))
+    new_product.valid_from = valid_from
+    # valid to 
+    # TODO: expect the end of the week (saturday)
+    # producer
+    producer_raw = parsed.find("span", class_="mod-article-tile__brand")
+    producer = producer_raw.contents[0].strip()
+    if producer != "":
+      new_product.producer = producer
+    # price
+    price_raw = parsed.find("span", class_="price__wrapper")
+    price = price_raw.contents[0].strip()
+    new_product.price = price
+    # price_before
+    price_before_raw = parsed.find("s", class_="price__previous")
+    if price_before_raw != None:
+      price_before = price_before_raw.contents[0]
+      new_product.price_before = price_before
+    # ! price base
+    price_base_raw = parsed.find("span", class_="price__base")
+    if price_base_raw != None:
+      ###print(price_base_raw.contents[0])
+      pass
+    # quantity/unit/amount
+    quantity_raw = parsed.find("span", class_="price__unit")
+    ###print(quantity_raw.contents[0])
+    # name
+    name_raw = parsed.find("span", class_="mod-article-tile__title")
+    name = name_raw.contents[0].strip()
+    new_product.name = name
+    # link
+    base_url = "https://www.aldi-nord.de"
+    link_raw = parsed.find("a", class_="mod-article-tile__action")
+    partial_link = link_raw.get("href")
+    if partial_link.startswith("https"):
+      # exclude discounts you only get in the online-shop
+      return None
+    link = base_url + partial_link
+    new_product.link = link
+    return new_product
+
+
+
+  @staticmethod
+  def get_products() -> list[Product]:
+    all_products = list()
+    url = "https://www.aldi-nord.de/angebote.html"
+    res = requests.get(url)
+    if res.status_code != 200:
+      print("unexpected status code.")
+    parsed = BeautifulSoup(res.text, "html.parser")
+    product_urls = list()
+    products_raw = parsed.find_all(lambda x: x.name == "div" and x.has_attr("data-tile-url") and re.search(r".articletile.", x.get("data-tile-url")))
+    if len(products_raw) == 0:
+      print("no article tiles found.")
+      return None
+    base_url = "https://www.aldi-nord.de"
+    for product_raw in products_raw:
+      partial_url = product_raw.get("data-tile-url")
+      product = Aldi_nord._get_and_parse_product(base_url + partial_url)
+      if product != None:
+        all_products.append(product)
+    return all_products
+      
+      
+
 
 class Aldi_sued:
  
@@ -127,15 +215,14 @@ class Aldi_sued:
     return img and img_src and figcaption
   
   @staticmethod
-  def _parse_product_partial_week(product_raw: element.Tag, producers: list[str]):
+  def _parse_product_partial_week(product_raw: element.Tag, producers: list[str]) -> Product:
     new_product = Product()
     base_url = "https://www.aldi-sued.de"
     partial_link = product_raw.find("a").get("href")
     if partial_link.startswith("https"):
-      # discounts you only get in the online-shop
+      # exclude discounts you only get in the online-shop
       return None
-    else:
-      link = base_url + partial_link
+    link = base_url + partial_link
     new_product.link = link
     name = product_raw.find("a").find("div").find("h2").string
     new_product.name = name
@@ -178,7 +265,7 @@ class Aldi_sued:
     return new_product
 
   @staticmethod
-  def _parse_product_whole_week(product_raw: element.Tag):
+  def _parse_product_whole_week(product_raw: element.Tag) -> Product:
     new_product = Product()
     # valid from/to
     current_year = time.localtime().tm_year
@@ -249,7 +336,7 @@ class Aldi_sued:
     return products
 
   @staticmethod
-  def get_products():
+  def get_products() -> list[Product]:
     urls_whole_week = [
       "https://www.aldi-sued.de/de/angebote/frischekracher.html", 
       "https://www.aldi-sued.de/de/angebote/preisaktion.html",
@@ -268,6 +355,9 @@ class Aldi_sued:
 
 
 if __name__ == "__main__":
-  res = Aldi_sued.get_products()
+  # res = Aldi_sued.get_products()
+  # print(len(res))
+  # print(res[33].name)
+  res = Aldi_nord.get_products()
   print(len(res))
   print(res[33].name)
