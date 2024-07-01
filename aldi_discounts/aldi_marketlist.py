@@ -13,7 +13,7 @@ COLUMNS = ["market_type", "postal_code", "city", "address", "latitude", "longitu
 
 def store_markets(markets: list[dict]):
   if len(markets) > 0:
-    con = sqlite3.connect("./markets.db")
+    con = sqlite3.connect("./aldi_markets.db")
     cursor = con.cursor()
     market_tuples = list()
     for market in markets:
