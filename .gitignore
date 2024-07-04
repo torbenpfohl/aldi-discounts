@@ -1,3 +1,8 @@
 .venv
 aldi_discounts/__pycache__
+aldi_discounts/private.key
+aldi_discounts/private.pem
 .vscode
+aldi_discounts/aldi_markets.db
+aldi_discounts/rewe_markets.db
+aldi_discounts/rewe_market_with_offer_ids.db
