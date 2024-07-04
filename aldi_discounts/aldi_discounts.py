@@ -7,10 +7,12 @@ import requests
 from bs4 import BeautifulSoup, element
 
 from product import Product
+from decorator import delay
 
 class Aldi_nord:
   
   @staticmethod
+  @delay
   def _get_and_parse_product(url: str) -> Product:
     res = requests.get(url)
     if res.status_code != 200:
@@ -228,7 +230,8 @@ class Aldi_sued:
     return new_product
 
   @staticmethod
-  def _get_products_from_url_whole_week(url: str):
+  @delay
+  def _get_products_from_url_whole_week(url: str) -> list[Product]:
     res = requests.get(url)
     parsed = BeautifulSoup(res.text, "html.parser")
     products = list()
@@ -241,7 +244,8 @@ class Aldi_sued:
     return products
   
   @staticmethod
-  def _get_products_from_url_partial_week(url: str):
+  @delay
+  def _get_products_from_url_partial_week(url: str) -> list[Product]:
     res = requests.get(url)
     parsed = BeautifulSoup(res.text, "html.parser")
     products = list()

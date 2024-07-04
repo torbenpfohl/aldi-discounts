@@ -8,7 +8,8 @@ from pathlib import Path
 import requests
 import httpx
 
-from get_rewe_creds import get_creds
+from get_rewe_creds import get_rewe_creds
+from decorator import delay
 
 COLUMNS = ["market_id", "market_name", "postal_code", "city", "address", "latitude", "longitude", "last_update"]
 
@@ -18,10 +19,11 @@ SOURCE_PATH = Path(__file__).resolve().parent
 FULL_KEY_FILE_PATH = os.path.join(SOURCE_PATH, PRIVATE_KEY_FILENAME)
 FULL_CERT_FILE_PATH = os.path.join(SOURCE_PATH, CERTIFICATE_FILENAME)
 
+@delay
 def get_markets(zip_code: str) -> list[dict]:
   files = os.listdir(SOURCE_PATH)
   if PRIVATE_KEY_FILENAME not in files or CERTIFICATE_FILENAME not in files:
-      get_creds(source_path=SOURCE_PATH, key_filename=PRIVATE_KEY_FILENAME, cert_filename=CERTIFICATE_FILENAME)
+      get_rewe_creds(source_path=SOURCE_PATH, key_filename=PRIVATE_KEY_FILENAME, cert_filename=CERTIFICATE_FILENAME)
   
   client_cert = FULL_CERT_FILE_PATH
   client_key = FULL_KEY_FILE_PATH
@@ -95,7 +97,6 @@ def create_marketlist_rewe():
     markets = get_markets(str(zipcode))
     if markets != None:
       store_markets(markets)
-      break
     all_zipcodes.remove(zipcode)
 
 if __name__ == "__main__":

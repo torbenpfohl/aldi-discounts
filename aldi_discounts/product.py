@@ -1,3 +1,5 @@
+from hashlib import md5
+
 class Product:
 
   def __init__(self):
@@ -12,11 +14,24 @@ class Product:
     self._valid_from = ""
     self._valid_to = ""
     self._link = ""
-    #self._origin = ""
-    #self._unique_id = ""  # only unique in the context of the respective market
+    self._origin = ""
+    self._unique_id = ""  # only unique in the context of the respective market
+    #self._nutri_score = ""
+    #self._app_deal = False
 
   def __str__() -> str:
     pass
+
+  # def __eq__(self, other):
+  #   return self.name == other.name and \
+  #     self.description == other.description and \
+  #     self.link == other.link and \
+  #     self.unique_id == other.unique_id
+  def __eq__(self, other):
+    return self.unique_id == other.unique_id
+
+  def __hash__(self):
+    return hash(self.unique_id)
 
   @property
   def name(self):
@@ -81,3 +96,23 @@ class Product:
   @link.setter
   def link(self, link):
     self._link = link
+
+  @property
+  def unique_id(self):
+    return self._unique_id
+
+  @unique_id.setter
+  def unique_id(self, unique_id):
+    self._unique_id = unique_id
+
+  @property
+  def origin(self):
+    return self._origin
+
+  @origin.setter
+  def origin(self, origin):
+    self._origin = origin
+
+
+def store_products(products: list[Product], path: str):
+  pass

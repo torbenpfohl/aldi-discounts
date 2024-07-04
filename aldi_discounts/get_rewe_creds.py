@@ -12,7 +12,7 @@ APK_DIR = "rewe"
 MTLS_PROD = "mtls_prod.pfx"
 MTLS_PASSWORD = b"NC3hDTstMX9waPPV"
 
-def get_creds(source_path, key_filename, cert_filename):
+def get_rewe_creds(source_path, key_filename, cert_filename):
   """Fetch the apk and extract private key and certificate.
 
   APK source: uptodown.com
@@ -89,4 +89,4 @@ def get_creds(source_path, key_filename, cert_filename):
 
 if __name__ == "__main__":
   source_path = Path(__file__).resolve().parent
-  get_creds(source_path, "private_test.key", "private_test.pem")
+  get_rewe_creds(source_path, "private_test.key", "private_test.pem")

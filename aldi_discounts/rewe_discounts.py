@@ -15,21 +15,34 @@ import uuid
 import time
 import sqlite3
 from pathlib import Path
-import pprint
 
 import httpx
 
-from get_rewe_creds import get_creds
+from get_rewe_creds import get_rewe_creds
 from product import Product
+from decorator import delay
 
 class Rewe:
+
+  COLUMNS = ["market_id", "offer_ids", "last_update"]
 
   PRIVATE_KEY_FILENAME = "private.key"
   CERTIFICATE_FILENAME = "private.pem"
   SOURCE_PATH = Path(__file__).resolve().parent
   FULL_KEY_FILE_PATH = os.path.join(SOURCE_PATH, PRIVATE_KEY_FILENAME)
   FULL_CERT_FILE_PATH = os.path.join(SOURCE_PATH, CERTIFICATE_FILENAME)
-  
+
+  @staticmethod
+  def store_market_with_offer_ids(market_id: str, offer_ids: list[str], last_update: str):
+    offer_ids.sort(key=lambda id: int(id))
+    con = sqlite3.connect("./rewe_market_with_offer_ids.db")
+    cur = con.cursor()
+    cur.execute(f"CREATE TABLE if not exists market_with_offer_ids({','.join(Rewe.COLUMNS)})")
+    cur.execute(f"INSERT INTO market_with_offer_ids({','.join(Rewe.COLUMNS)}) VALUES('{market_id}', '{','.join(offer_ids)}', '{last_update}')")
+    con.commit()
+    cur.close()
+    con.close()
+
   @staticmethod
   def load_rewe_market_ids() -> list[str]:
     # load from database
@@ -43,11 +56,12 @@ class Rewe:
     return market_ids
 
   @staticmethod
-  def get_products_with_id(market_id: str) -> list[Product]:
+  @delay
+  def get_products_with_id(market_id: str) -> (list[Product], list[str]):
     """Get the products for one market id."""
     files = os.listdir(Rewe.SOURCE_PATH)
     if Rewe.PRIVATE_KEY_FILENAME not in files or Rewe.CERTIFICATE_FILENAME not in files:
-        get_creds(source_path=Rewe.SOURCE_PATH, key_filename=Rewe.PRIVATE_KEY_FILENAME, cert_filename=Rewe.CERTIFICATE_FILENAME)
+        get_rewe_creds(source_path=Rewe.SOURCE_PATH, key_filename=Rewe.PRIVATE_KEY_FILENAME, cert_filename=Rewe.CERTIFICATE_FILENAME)
     
     client_cert = Rewe.FULL_CERT_FILE_PATH
     client_key = Rewe.FULL_KEY_FILE_PATH
@@ -80,47 +94,88 @@ class Rewe:
     res = res.json()
     raw_products = res["data"]["offers"]
     all_offers = list()
+    all_offer_ids = list()
     # valid_to
     valid_to = time.localtime(raw_products["untilDate"] / 1000)
     valid_to = time.strftime("%d.%m.%Y", valid_to)
     for category in raw_products["categories"]:
-      # print(category["title"])
       if re.search(r".*PAYBACK.*", category["title"]):
         continue
       category_offers = category["offers"]
       for offer in category_offers:
         if offer["title"] == "":
           continue
-        # pp = pprint.PrettyPrinter()
-        # pp.pprint(offer)
-        # break
         new_product = Product()
+        # name
         new_product.name = offer["title"]
+        # valid_to
         new_product.valid_to = valid_to
+        # price
         new_product.price = offer["priceData"]["price"]
+        # description
+        new_product.description = offer["subtitle"]
         # detail.contents has a Art.-Nr. and can have a Hersteller and sometimes also a Herkunft
         for line in offer["detail"]["contents"]:
           if line["header"] == "Produktdetails":
             details = line["titles"]
         for line in details:
           if line.startswith("Art.-Nr."):
-            pass
+            # unique_id
+            new_product.unique_id = line.removeprefix("Art.-Nr.:").strip()
+            all_offer_ids.append(new_product.unique_id)
           if line.startswith("Hersteller"):
+            # producer
             new_product.producer = line.removeprefix("Hersteller:").strip()
           if line.startswith("Herkunft"):
-            pass
+            # origin
+            new_product.origin = line.removeprefix("Herkunft:").strip()
+        # offer["detail"]["nutriScore"]
+        # offer["detail"]["pitchIn"] <- 'Nur in der Bedienungstheke', 'Mit App günstiger'
 
+        # valid_to, price_before, link <- missing
+        # TODO: link: api-endpoint for details? does it add anything?
         all_offers.append(new_product)
 
-    return all_offers
+    return all_offers, all_offer_ids
 
 
   @staticmethod
-  def get_products():
-    """Get the products and store them."""
-    pass
+  @delay
+  def get_product_details(product: Product, product_id: str = None) -> Product:
+    if product_id == None:
+      product_id = product.unique_id
+    # TODO: call different rewe api
+    return product
+    
+
+  @staticmethod
+  def get_products() -> list[Product]:
+    """Get the products from every market and stores the article ids together with the market id.
+    Returns all unique offers.
+    
+    all_offers contains the parsed offers 
+    -> TODO: for every product/offer we need to call a different api-endpoint
+    """
+    now = time.localtime()
+    last_update = str(now.tm_year) + "-" + str(now.tm_yday)
+    market_ids = Rewe.load_rewe_market_ids()
+    all_offers = set()
+    all_offer_ids = set()
+    for market_id in market_ids:
+      market_offers, market_offer_ids = Rewe.get_products_with_id(market_id)
+      all_offer_ids.update(set(market_offer_ids))
+      # TODO: is there a way to make a request to an endpoint with just the article id?
+      #       if so: does it lead to more information?
+      all_offers.update(set(market_offers))
+      # write the offer ids together with the market id in a table
+      Rewe.store_market_with_offer_ids(market_id, list(set(market_offer_ids)), last_update)
+    all_offers = map(get_product_details, all_offers)
+    return all_offers
+
 
 
 if __name__ == "__main__":
   # Rewe.load_rewe_market_ids()
-  Rewe.get_products_with_id(market_id="840671")
+  # Rewe.get_products_with_id(market_id="840671")
+  Rewe.get_products()
+  
