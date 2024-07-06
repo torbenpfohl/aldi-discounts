@@ -10,9 +10,8 @@ from datetime import date, timedelta
 from httpx import Client
 from bs4 import BeautifulSoup, element
 
-from util import delay
+from util import delay, get_rewe_creds
 from product import Product
-from get_rewe_creds import get_rewe_creds
 
 class Aldi_nord:
   

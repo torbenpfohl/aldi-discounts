@@ -8,9 +8,8 @@ from time import localtime
 from httpx import Client
 from bs4 import BeautifulSoup
 
-from util import delay
+from util import delay, get_rewe_creds
 from market import Market
-from get_rewe_creds import get_rewe_creds
 
 # TODO maybe add the opening hours
 # and e.g. for aldi sued: "Parkplatz", "Meine Backwelt", "E-Tankstelle", "SelfCheckout"
