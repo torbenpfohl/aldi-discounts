@@ -1,6 +1,6 @@
 .venv
 aldi_discounts/__pycache__
-aldi_discounts/private.key
-aldi_discounts/private.pem
+aldi_discounts/*.key
+aldi_discounts/*.pem
 .vscode
 aldi_discounts/*.db
