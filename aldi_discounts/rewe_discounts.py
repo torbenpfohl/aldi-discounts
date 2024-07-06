@@ -12,15 +12,15 @@ Use the unique id of every product:
 import os
 import re
 import uuid
-import time
+from time import localtime, strftime
 import sqlite3
 from pathlib import Path
 
-import httpx
+from httpx import Client
 
-from get_rewe_creds import get_rewe_creds
+from util import delay
 from product import Product
-from decorator import delay
+from get_rewe_creds import get_rewe_creds
 
 class Rewe:
 
@@ -44,11 +44,11 @@ class Rewe:
     con.close()
 
   @staticmethod
-  def load_rewe_market_ids() -> list[str]:
+  def load_rewe_market_ids(market_db_path: str) -> list[str]:
     # load from database
-    con = sqlite3.connect("./rewe_markets.db")
+    con = sqlite3.connect(market_db_path)
     cur = con.cursor()
-    cur.execute("select market_id from markets")
+    cur.execute("SELECT market_id FROM markets")
     market_ids = cur.fetchall()
     market_ids = [id[0] for id in market_ids]
     cur.close()
@@ -57,7 +57,7 @@ class Rewe:
 
   @staticmethod
   @delay
-  def get_products_with_id(market_id: str) -> (list[Product], list[str]):
+  def get_products_with_market_id(market_id: str) -> tuple[list[Product], list[str]]:
     """Get the products for one market id."""
     files = os.listdir(Rewe.SOURCE_PATH)
     if Rewe.PRIVATE_KEY_FILENAME not in files or Rewe.CERTIFICATE_FILENAME not in files:
@@ -87,7 +87,7 @@ class Rewe:
       "Connection": "Keep-Alive",
       "Accept-Encoding": "gzip",
       }
-    res = httpx.Client(http2=True, cert=(client_cert, client_key), headers=header).get(url)
+    res = Client(http2=True, cert=(client_cert, client_key), headers=header).get(url)
     if res.status_code != 200:
       print("problem with the api.")
       return None
@@ -96,8 +96,8 @@ class Rewe:
     all_offers = list()
     all_offer_ids = list()
     # valid_to
-    valid_to = time.localtime(raw_products["untilDate"] / 1000)
-    valid_to = time.strftime("%d.%m.%Y", valid_to)
+    valid_to = localtime(raw_products["untilDate"] / 1000)
+    valid_to = strftime("%d.%m.%Y", valid_to)
     for category in raw_products["categories"]:
       if re.search(r".*PAYBACK.*", category["title"]):
         continue
@@ -122,7 +122,6 @@ class Rewe:
           if line.startswith("Art.-Nr."):
             # unique_id
             new_product.unique_id = line.removeprefix("Art.-Nr.:").strip()
-            all_offer_ids.append(new_product.unique_id)
           if line.startswith("Hersteller"):
             # producer
             new_product.producer = line.removeprefix("Hersteller:").strip()
@@ -133,8 +132,8 @@ class Rewe:
         # offer["detail"]["pitchIn"] <- 'Nur in der Bedienungstheke', 'Mit App günstiger'
 
         # valid_to, price_before, link <- missing
-        # TODO: link: api-endpoint for details? does it add anything?
         all_offers.append(new_product)
+        all_offer_ids.append(new_product.unique_id)
 
     return all_offers, all_offer_ids
 
@@ -149,27 +148,26 @@ class Rewe:
     
 
   @staticmethod
-  def get_products() -> list[Product]:
+  def get_products(market_db_path: str) -> list[Product]:
     """Get the products from every market and stores the article ids together with the market id.
     Returns all unique offers.
     
     all_offers contains the parsed offers 
     -> TODO: for every product/offer we need to call a different api-endpoint
     """
-    now = time.localtime()
+    now = localtime()
     last_update = str(now.tm_year) + "-" + str(now.tm_yday)
-    market_ids = Rewe.load_rewe_market_ids()
+    market_ids = Rewe.load_rewe_market_ids(market_db_path)
     all_offers = set()
     all_offer_ids = set()
     for market_id in market_ids:
-      market_offers, market_offer_ids = Rewe.get_products_with_id(market_id)
-      all_offer_ids.update(set(market_offer_ids))
-      # TODO: is there a way to make a request to an endpoint with just the article id?
-      #       if so: does it lead to more information?
+      market_offers, market_offer_ids = Rewe.get_products_with_market_id(market_id)
       all_offers.update(set(market_offers))
+      all_offer_ids.update(set(market_offer_ids))
       # write the offer ids together with the market id in a table
       Rewe.store_market_with_offer_ids(market_id, list(set(market_offer_ids)), last_update)
-    all_offers = map(get_product_details, all_offers)
+    #all_offers = map(Rewe.get_product_details, all_offers)
+    all_offers = list(all_offers)
     return all_offers
 
 
