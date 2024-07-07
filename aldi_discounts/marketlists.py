@@ -3,6 +3,7 @@ import re
 import uuid
 import random
 from pathlib import Path
+from datetime import date
 from time import localtime
 
 from httpx import Client
@@ -11,36 +12,52 @@ from bs4 import BeautifulSoup
 from util import delay, get_rewe_creds
 from market import Market
 
+__all__ = ["Aldi_sued", "Aldi_nord", "Penny", "Rewe"]
+
 # TODO maybe add the opening hours
 # and e.g. for aldi sued: "Parkplatz", "Meine Backwelt", "E-Tankstelle", "SelfCheckout"
 
 
 class Aldi_sued:
+  """approx. 2000 requests. 
+  
+  (at least as many as there are stores (in germany))
+  """
+  # TODO: use milestones, like 'all stores for Hessen saved'
+  #       to which we can come back to in case something goes wrong
+  # TODO: create progress-line (how many stores are saved)
+  #       we know there are nearly 2000 stores.
+  # TODO: just in general add better infos (also for debugging)
+
+  TYPE = "aldi-sued"
 
   @staticmethod
   @delay
   def _get_market_details(market_link: str) -> Market:
+    print(market_link)  # debugging  #TODO: remove when better info and progress bar 
     market = Market()
     res = Client(http2=True).get(market_link)
     parsed_link = BeautifulSoup(res.text, "html.parser")
-    name = parsed_link.find(id="location-name").contents
-    market.name = name[0]
+    if name_raw := parsed_link.find(id="location-name"):
+      market.name = str(name_raw.contents[0])
+    else:
+      return None
     coords = parsed_link.find("span", class_="Address-coordinates")
     for coord in coords.children:
       if coord["itemprop"] == "latitude":
-        market.latitude = coord["content"]
+        market.latitude = str(coord["content"])
       elif coord["itemprop"] == "longitude":
-        market.longitude = coord["content"]
+        market.longitude = str(coord["content"])
     address = parsed_link.find("address", itemtype="http://schema.org/PostalAddress")
     postal_code = address.find("span", class_="Address-field Address-postalCode").contents
-    market.postal_code = postal_code[0]
+    market.postal_code = str(postal_code[0])
     city = address.find("span", class_="Address-field Address-city").contents
-    market.city = city[0]
+    market.city = str(city[0])
     address_line = address.find("span", class_="Address-field Address-line1").contents
-    market.address = address_line[0]
+    market.address = str(address_line[0])
     now = localtime()
-    market.last_update = str(now.tm_year) + "-" + str(now.tm_yday)
-    market.type = "aldi-sued"
+    market.last_update = date(now.tm_year, now.tm_mon, now.tm_mday)
+    market.type = Aldi_sued.TYPE
     return market
 
   @staticmethod
@@ -79,12 +96,12 @@ class Aldi_sued:
       else:
         print("Something is wrong with the pattern search: -> state links")
     for link in city_links_multiple_markets:
-      links = Aldi_sued._unfold_multiple_markets_aldi_sued(link)
+      links = Aldi_sued._unfold_multiple_markets(link)
       city_links.extend(links)
     return city_links
 
   @staticmethod
-  def create_marketlist() -> list[Market]:
+  def get_markets() -> list[Market]:
     """Takes quiet a while (ca. 30 min) and uses a larger bit of memory.
     # TODO alternative: call store every hundret stores or so.
     """
@@ -98,20 +115,24 @@ class Aldi_sued:
 
     # the markets are sorted under states (e.g. Hessen); loop over all states
     for link in state_links:
-      links = Aldi_sued._call_state_link_aldi_sued(link)
+      links = Aldi_sued._call_state_link(link)
       city_links.extend(links)
 
     for link in city_links:
-      market = Aldi_sued._get_market_details_aldi_sued(link)
-      markets.append(market)
+      market = Aldi_sued._get_market_details(link)
+      if market != None:
+        markets.append(market)
 
     return markets
 
 
 class Aldi_nord:
+  """Three request."""
+
+  TYPE = "aldi-nord"
 
   @staticmethod
-  def create_marketlist_aldi_nord() -> list[Market]:
+  def get_markets() -> list[Market]:
     """API endpoint url can stop working. # TODO create a more robust version to get the api-url."""
     markets = list()
     url = "https://www.aldi-nord.de/filialen-und-oeffnungszeiten.html"
@@ -120,7 +141,7 @@ class Aldi_nord:
     static_url_part1 = "https://locator.uberall.com/api/storefinders/"
     static_url_part3 = "/locations/all?"
     static_url_part5 = "&language=de&fieldMask=id&fieldMask=lat&fieldMask=lng&fieldMask=city&fieldMask=streetAndNumber&fieldMask=zip&fieldMask=addressExtra&fieldMask=name&"
-    dynamic_url_part2 = parsed.find("div", id="store-finder-widget")["data-key"]
+    dynamic_url_part2 = str(parsed.find("div", id="store-finder-widget")["data-key"])
     url2 = "https://locator.uberall.com/locator-assets/storeFinderWidget-v2-withoutMap.js"
     res2 = Client(http2=True).get(url2)
     dynamic_url_part4 = re.findall(r"\?v=\d+", res2.text)[0]
@@ -135,7 +156,7 @@ class Aldi_nord:
       return None
     for location in res3["response"]["locations"]:
       market = Market()
-      market.type = "aldi-nord"
+      market.type = Aldi_nord.TYPE
       market.postal_code = location["zip"]
       market.city = location["city"]
       if location["addressExtra"] != None:
@@ -145,7 +166,7 @@ class Aldi_nord:
       market.latitude = location["lat"]
       market.longitude = location["lng"]
       now = localtime()
-      market.last_update = str(now.tm_year) + "-" + str(now.tm_yday)
+      market.last_update = date(now.tm_year, now.tm_mon, now.tm_mday)
       market.name = location["name"]
       market.id = location["id"]
       markets.append(market)
@@ -153,9 +174,12 @@ class Aldi_nord:
 
 
 class Penny:
+  """One request."""
+  
+  TYPE = "penny"
   
   @staticmethod
-  def create_marketlist_penny() -> list[Market]:
+  def get_markets() -> list[Market]:
     url = "https://www.penny.de/.rest/market"
     res = Client(http2=True).get(url)
     if res.status_code != 200:
@@ -166,7 +190,7 @@ class Penny:
     for m in markets:
       market = Market()
       market.id = m["sellingRegion"]
-      market.type = "penny"
+      market.type = Penny.TYPE
       market.name = m["marketName"]
       market.address = m["streetWithHouseNumber"]
       market.city = m["city"]
@@ -174,13 +198,21 @@ class Penny:
       market.latitude = m["latitude"]
       market.longitude = m["longitude"]
       now = localtime()
-      market.last_update = str(now.tm_year) + "-" + str(now.tm_yday)
+      market.last_update = date(now.tm_year, now.tm_mon, now.tm_mday)
       all_markets.append(market)
 
     return all_markets
 
 
 class Rewe:
+  """99999-10000 = 89999 requests."""
+
+  # TODO: in case something goes wrong save the already used zipcodes
+  #       so we can get back to something and don't have to start from scratch
+  # TODO: create progress-line (how many stores are saved)
+  #       we know there are nearly 3700 stores.
+
+  TYPE = "rewe"
 
   PRIVATE_KEY_FILENAME = "private.key"
   CERTIFICATE_FILENAME = "private.pem"
@@ -197,7 +229,7 @@ class Rewe:
 
   @staticmethod
   @delay
-  def _get_markets(zip_code: str) -> list[Market]:
+  def _get_markets_from_zip_code(zip_code: str) -> list[Market]:
     files = os.listdir(Rewe.SOURCE_PATH)
     if Rewe.PRIVATE_KEY_FILENAME not in files or Rewe.CERTIFICATE_FILENAME not in files:
         get_rewe_creds(source_path=Rewe.SOURCE_PATH, key_filename=Rewe.PRIVATE_KEY_FILENAME, cert_filename=Rewe.CERTIFICATE_FILENAME)
@@ -241,7 +273,7 @@ class Rewe:
     for m in markets:
       market = Market()
       market.id = m["id"]
-      market.type = "rewe"
+      market.type = Rewe.TYPE
       market.name = m["name"]
       market.postal_code = m["rawValues"]["postalCode"]
       market.city = m["rawValues"]["city"]
@@ -249,22 +281,22 @@ class Rewe:
       market.latitude = m["location"]["latitude"]
       market.longitude = m["location"]["longitude"]
       now = localtime()
-      market.last_update = str(now.tm_year) + "-" + str(now.tm_yday)
+      market.last_update = date(now.tm_year, now.tm_mon, now.tm_mday)
       all_markets.append(market)
     return all_markets
 
   @staticmethod
-  def create_marketlist_rewe() -> list[Market]:
+  def get_markets(zipcode_range: tuple[int, int] = (10000,99999)) -> list[Market]:
     all_markets: list[Market] = list()
-    all_zipcodes = [i for i in range(10000,99999)]
+    all_zipcodes = [i for i in range(*zipcode_range)]
     while len(all_zipcodes) != 0:
       zipcode = random.choice(all_zipcodes)
-      markets = Rewe._get_markets(str(zipcode))
+      markets = Rewe._get_markets_from_zip_code(str(zipcode))
       if markets != None:
         for market in markets:
+          # no doubles!
           if market.id not in [m.id for m in all_markets]:
             all_markets.append(market)
-        break  # TODO for test, remove later
       all_zipcodes.remove(zipcode)
     return all_markets
 

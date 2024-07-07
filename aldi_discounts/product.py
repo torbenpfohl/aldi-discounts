@@ -1,6 +1,6 @@
 
+from datetime import date
 from dataclasses import dataclass, asdict
-# TODO: use @dataclass
 
 @dataclass(init=False)
 class Product:
@@ -8,25 +8,30 @@ class Product:
   price: str = None
   quantity: str = None
   base_price: str = None   # e.g. 9.95
-  base_price_unit: str = None   # e.g. 1 kg
+  base_price_unit: str = None   # e.g. kg
   price_before: str = None
   producer: str = None
   description: str = None
   currency: str = "€"
-  valid_from: str = None
-  valid_to: str = None
+  valid_from: date = None
+  valid_to: date = None
   link: str = None
   origin: str = None
   unique_id: str = None
   app_deal: bool = None
+  # pfand/ bottle_deposit
+  # nutri_score?
 
-  def __eq__(self, other):
-    return self.unique_id == other.unique_id
+  # def __eq__(self, other):
+  #   if not isinstance(other, Product):
+  #     return NotImplemented
+  #   return self.unique_id == other.unique_id
   
-  def __hash__(self):
-    return hash(self.unique_id)
+  # def __hash__(self):
+  #   return hash(self.unique_id)
 
 
+# TODO: remove
 class Product2:
 
   def __init__(self):
