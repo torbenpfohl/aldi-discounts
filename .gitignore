@@ -2,6 +2,7 @@
 .vscode
 aldi_discounts/__pycache__
 aldi_discounts/log
-aldi_discounts/tmp
+aldi_discounts/tmp/*key
+aldi_discounts/tmp/*pem
 aldi_discounts/backup
 aldi_discounts/manual-backup
