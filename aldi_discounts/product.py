@@ -1,9 +1,23 @@
 
+import os
+import sqlite3
 from datetime import date
 from dataclasses import dataclass, asdict
 
+product_tablename = "products"  # products
+
 @dataclass(init=False)
 class Product:
+  """Use hash and eq ONLY when you know that unique id is set and is really unique.
+  
+  E.g. Penny and Rewe can (and need to) use it.
+  ** rewe uses the same 'unique_id' for products with different prices 
+     (some regions/market_ids have a cheaper price)
+     - so unique_id_internal for rewe is build the following way:
+       unique_id + price (without the seperator), e.g. '1359460' + '1399' => '13594601399'
+     - for every other market type (that does not need this) it's just the same as unique_id
+  """
+  market_type: str = None
   name: str = None
   price: str = None
   quantity: str = None
@@ -18,128 +32,71 @@ class Product:
   link: str = None
   origin: str = None
   unique_id: str = None
+  unique_id_internal: str = None  # ** (-> docstring)
   app_deal: bool = None
   # pfand/ bottle_deposit
   # nutri_score?
+  # lowest_price_last_30_days?
 
-  # def __eq__(self, other):
-  #   if not isinstance(other, Product):
-  #     return NotImplemented
-  #   return self.unique_id == other.unique_id
+  def dict(self):
+    return asdict(self)
   
-  # def __hash__(self):
-  #   return hash(self.unique_id)
-
-
-# TODO: remove
-class Product2:
-
-  def __init__(self):
-    self._name = ""
-    self._price = ""
-    #self._price_base = ""  # e.g. 320
-    #self._price_base_unit = ""  # e.g. g
-    self._price_before = ""
-    self._producer = ""
-    self._description = ""
-    self._currency = "€"
-    self._valid_from = ""
-    self._valid_to = ""
-    self._link = ""
-    self._origin = ""
-    self._unique_id = ""  # only unique in the context of the respective market
-    #self._nutri_score = ""
-    #self._app_deal = False
-
-  def __str__() -> str:
-    pass
+  @staticmethod
+  def primary_key():
+    return "name, price, market_type, valid_from, valid_to, unique_id_internal"  # "name, price, market_type, valid_from, valid_to"
 
   def __eq__(self, other):
-    return self.unique_id == other.unique_id
+    if not isinstance(other, Product):
+      return NotImplemented
+    return self.unique_id_internal == other.unique_id_internal
 
   def __hash__(self):
-    return hash(self.unique_id)
+    return hash(self.unique_id_internal)
 
-  @property
-  def name(self):
-    return self._name
+def create_table(cursor):
+  columns = list(Product().dict().keys())
+  columns.append(f"PRIMARY KEY ({Product.primary_key()})")
+  cursor.execute(f"CREATE TABLE if not exists {product_tablename}({','.join(columns)}) WITHOUT ROWID")
+  return cursor
+
+def store(products: list[Product], path: str):
+  """sqlite3. simple insert. no checking."""
+  if len(products) == 0:
+    return None
+  con = sqlite3.connect(path)
+  cur = con.cursor()
+  cur = create_table(cur)
+  columns = list(Product().dict().keys())
+  cur.executemany(f"REPLACE INTO {product_tablename} VALUES({','.join(['?']*len(columns))})",
+                  [tuple(product.dict().values()) for product in products])
+  con.commit()
+  cur.close()
+  con.close()
+
+def products_present(market_type: str, week_start: date, path: str, *, light_check: bool = True) -> bool:
+  if not os.path.exists(path):
+    return None
+  if light_check:
+    con = sqlite3.connect(path)
+    cur = con.cursor()
+    cur.execute(f"SELECT * FROM {product_tablename} WHERE market_type='{market_type}' AND valid_from>='{week_start}'")
+    one = cur.fetchone()
+    if one != None and len(one) != 0:
+      return True
+    else:
+      return False
+  else:
+    # TODO Check how many products are present
+    return None
   
-  @name.setter
-  def name(self, name):
-    self._name = name
-
-  @property
-  def price(self):
-    return self._price
   
-  @price.setter
-  def price(self, price):
-    self._price = str(price).replace('.', ',')
 
-  @property
-  def price_before(self):
-    return self._price
-  
-  @price_before.setter
-  def price_before(self, price):
-    self._price_before = str(price).replace('.', ',')
-
-  @property
-  def producer(self):
-    return self._producer
-  
-  @producer.setter
-  def producer(self, producer):
-    self._producer = producer
-  
-  @property
-  def description(self):
-    return self._description
-  
-  @description.setter
-  def description(self, description):
-    self._description = description
-  
-  @property
-  def valid_from(self):
-    return self._valid_from
-  
-  @valid_from.setter
-  def valid_from(self, valid_from):
-    self._valid_from = valid_from
-
-  @property
-  def valid_to(self):
-    return self._valid_to
-  
-  @valid_to.setter
-  def valid_to(self, valid_to):
-    self._valid_to = valid_to
-
-  @property
-  def link(self):
-    return self._link
-  
-  @link.setter
-  def link(self, link):
-    self._link = link
-
-  @property
-  def unique_id(self):
-    return self._unique_id
-
-  @unique_id.setter
-  def unique_id(self, unique_id):
-    self._unique_id = unique_id
-
-  @property
-  def origin(self):
-    return self._origin
-
-  @origin.setter
-  def origin(self, origin):
-    self._origin = origin
-
-
-def store_products(products: list[Product], path: str):
+def is_valid_product(product: Product) -> Product | None:
+  """Check for certain absolutely necessary properties."""
+  #TODO: which properties?
+  # name, price, quantity, type, valid_from, valid_to, unique_id(_internal) <- should also be enough for a primary key
   pass
+
+if __name__ == "__main__":
+  res = products_present("hit", date(2024, 7, 21), "./data/products.db")
+  print(res)
