@@ -1,7 +1,6 @@
 .venv
 .vscode
 aldi_discounts/__pycache__
-aldi_discounts/data
 aldi_discounts/log
 aldi_discounts/tmp
 aldi_discounts/backup
