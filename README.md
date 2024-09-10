@@ -34,6 +34,7 @@ makes a lot of assumptions regarding the structur of the returned and parsed web
 
 - httpx[http2]
 - cryptography
+- beautifulsoup4
 
 ## Code Structur
 - main.py does all the main database work.
