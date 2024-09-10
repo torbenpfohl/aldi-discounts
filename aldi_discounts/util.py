@@ -2,6 +2,7 @@ import re
 import os
 import shutil
 import logging
+from time import localtime
 from pathlib import Path
 from random import randint
 from functools import wraps
@@ -103,8 +104,10 @@ def delay_range(min_msec: int = 200, max_msec: int = 1000):
   return delay
 
 
-def set_week_start_and_end(now: struct_time) -> tuple[date, date]:
+def set_week_start_and_end(now: struct_time) -> tuple[date, date]:  # TODO: make a decision!!
   """week_start = monday; week_end = sunday."""
+  if now == None:
+    now = localtime()
   now_date = date(now.tm_year, now.tm_mon, now.tm_mday)
   # week_start = now_date - timedelta(days=now.tm_wday)
   # week_end = now_date + timedelta(days=(6 - now.tm_wday))
@@ -134,6 +137,7 @@ def setup_logger(source_path: str, parent_name: str, logger_name: str, loglevel:
     logger.addHandler(log_handler)
 
   return logger
+
 
 
 """

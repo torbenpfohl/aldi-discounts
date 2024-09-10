@@ -6,3 +6,5 @@ aldi_discounts/tmp/*key
 aldi_discounts/tmp/*pem
 aldi_discounts/backup
 aldi_discounts/manual-backup
+aldi_discounts/data
+aldi_discounts/tmp

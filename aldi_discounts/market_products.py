@@ -1,8 +1,8 @@
 
 import os
 import sqlite3
-from dataclasses import dataclass, asdict
 from datetime import date
+from dataclasses import dataclass, asdict
 
 market_products_tablename = "market_products"
 
@@ -22,17 +22,17 @@ class Market_Products:
   def __eq__(self, other):
     if not isinstance(other, Market_Products):
       return NotImplemented
-    return self.id == other.id
+    return self.id == other.id and self.week_start == other.week_start and self.week_end == other.week_end
   
   def __hash__(self):
-    return hash(self.id)
+    return hash((self.id, self.week_start, self.week_end))
 
   def dict(self):
     return asdict(self)
   
   @staticmethod
   def primary_key():
-    return "id, market_type"
+    return "id, market_type, week_start, week_end"
   
 
 def create_table(cursor):

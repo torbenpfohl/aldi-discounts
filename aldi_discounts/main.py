@@ -20,11 +20,12 @@ from util import delay_range, set_week_start_and_end
 from market import store as store_markets
 from market import delete as delete_markets
 from market import get_last_update, get_market_ids
-from market_extra import get_group_ids
 from market_extra import store as store_market_extra_infos
 from product import store as store_products
 from product import products_present
 from market_products import store_multiple as store_markets_with_product_ids
+from group_id_markets import get_group_ids
+from group_id_markets import store as store_selling_regions_with_markets
 
 LOG_PATH_FOLDERNAME = "log"
 TMP_PATH_FOLDERNAME = "tmp"
@@ -45,9 +46,10 @@ MARKET_DB_PATH = os.path.join(DATA_PATH, "markets.db")
 MARKET_EXTRA_DB_PATH = os.path.join(DATA_PATH, "market_extra.db")
 PRODUCT_DB_PATH = os.path.join(DATA_PATH, "products.db")
 MARKET_PRODUCTS_DB_PATH = os.path.join(DATA_PATH, "market_products.db")
+SELLING_REGION_MARKETS_DB_PATH = os.path.join(DATA_PATH, "selling_region_markets.db")
 REWE_MARKETLIST_TEMP_ZIPCODE_RANGE = os.path.join(TMP_PATH, "rewe_marketlist_temp.json")
 REWE_DISCOUNTS_TEMP_MARKETS_TO_DO = os.path.join(TMP_PATH, "rewe_discount_temp.json")
-REWE_DISCOUNTS_TEMP_DESCRIPTIONS = os.path.join(TMP_PATH, "rewe_product_descriptions_temp.db")
+NETTO_DISCOUNTS_TEMP_MARKETS_TO_DO = os.path.join(TMP_PATH, "netto_discount_temp.json")
 
 # TODO: use Market retrieval with Threads 
 # TODO: make delay more dynamic, ie. if we get an unexpected status_code or request error
@@ -154,10 +156,10 @@ class Markets:
           oldest_last_update = None
       # Do we need to create the markets (anew)? 
       if oldest_last_update == None or oldest_last_update + threshold_market_renewal <= now_date:
-        # Delete market rows if supplied in force-list.
-        if isinstance(force, list) and market_type in force:
-          logger.info("Delete all markets for %s from markets-table.", market_type)
-          delete_markets(MARKET_DB_PATH, market_type)
+        # Delete market rows if supplied in force-list. UPDATE: too dangerous
+        # if isinstance(force, list) and market_type in force:
+        #   logger.info("Delete all markets for %s from markets-table.", market_type)
+        #   delete_markets(MARKET_DB_PATH, market_type)
         # Some markets need extra handling.
         match market_type:
           # Rewe is special. Because of approx. 90000 requests, it is split into batches.
@@ -169,11 +171,12 @@ class Markets:
               markets = getattr(marketlists, market).get_markets(zipcode_range)
               store_markets(markets, MARKET_DB_PATH)
               logger.info("finished market query for zip range: %s", zipcode_range)
-          case "penny":
-            markets, markets_extra = getattr(marketlists, market).get_markets(extras=True)
-            if markets != None and markets_extra != None:
+          case "penny" | "norma":
+            markets, markets_extra, selling_regions_with_markets = getattr(marketlists, market).get_markets(extras=True)
+            if markets != None and markets_extra != None and selling_regions_with_markets != None:
               store_markets(markets, MARKET_DB_PATH)
               store_market_extra_infos(markets_extra, MARKET_EXTRA_DB_PATH)
+              store_selling_regions_with_markets(selling_regions_with_markets, SELLING_REGION_MARKETS_DB_PATH)
             else:
               logger.warning("%s failed", market_type)
               continue
@@ -229,17 +232,17 @@ class Products:
 
   @staticmethod
   @delay_range(120_000, 300_000)
-  def _rewe_batches(max_batch_size: int = 100) -> tuple[list[str], int]:
+  def _batches(market_type: str, tmp_path: str, max_batch_size: int = 100) -> tuple[list[str], int]:
     """Don't overload the api, create batches with sleep in between.
     
     Returns a list of market ids and a status code (0 = batches to do, 1 = last_batch)"""
-    if os.path.exists(REWE_DISCOUNTS_TEMP_MARKETS_TO_DO):
-      with open(REWE_DISCOUNTS_TEMP_MARKETS_TO_DO, "r") as file:
+    if os.path.exists(tmp_path):
+      with open(tmp_path, "r") as file:
         market_ids = json.load(file)
     else:
-      market_ids = get_market_ids("rewe", MARKET_DB_PATH)
+      market_ids = get_market_ids(market_type, MARKET_DB_PATH)
       if market_ids == None or len(market_ids) == 0:
-        logger.warning("No rewe market ids in market-table.")
+        logger.warning(f"No {market_type} market-ids in market-table.")
         return None
 
     batch = sample(market_ids, k=min(max_batch_size, len(market_ids)))
@@ -247,24 +250,23 @@ class Products:
     market_ids = [market_id for market_id in market_ids if market_id not in batch]  # maybe use a set
 
     if len(market_ids) == 0:
-      os.remove(REWE_DISCOUNTS_TEMP_MARKETS_TO_DO)
+      os.remove(tmp_path)
       return batch, 1
     else:
-      with open(REWE_DISCOUNTS_TEMP_MARKETS_TO_DO, "w") as file:
+      with open(tmp_path, "w") as file:
         json.dump(market_ids, file)
       return batch, 0
-
   
   @staticmethod
-  def create_product_db(market_types: list[str] = marketlists.__all__):
+  def create_product_db(market_types: list[str] = discounts.__all__):
 
     # Was a market-list supplied?
     checked_market_types = list()
     for mt in market_types:
-      if mt in marketlists.__all__:
+      if mt in discounts.__all__:
         checked_market_types.append(mt)
       else:
-        logger.info(f"Supplied market not (yet) available. Or wrong name. Use any of {marketlists.__all__}")
+        logger.info(f"Supplied market not (yet) available. Or wrong name. Use any of {discounts.__all__}")
     
     week_start, _ = set_week_start_and_end(localtime())
 
@@ -276,56 +278,28 @@ class Products:
         update = True
       if market_type == "rewe" and os.path.exists(REWE_DISCOUNTS_TEMP_MARKETS_TO_DO):
         update = True
+      if market_type == "netto" and os.path.exists(NETTO_DISCOUNTS_TEMP_MARKETS_TO_DO):
+        update = True
       if not update:
         continue
       logger.info("Starting discount retrieval for %s", market_type)
       match market_type:
-        # access markets-table to get all hit market ids; and use batches again.
-        # since the descriptions can be different for the same product a tmp-table is created that stores all descriptions (unique_id, description)
-        #   and in the end we check which one (or a composite) we use.
-        case "rewe":
+        # access markets-table to get all rewe market ids; and use batches again.
+        case "rewe" | "netto":
+          if market_type == "rewe":
+            temp_path = REWE_DISCOUNTS_TEMP_MARKETS_TO_DO
+          elif market_type == "netto":
+            temp_path = NETTO_DISCOUNTS_TEMP_MARKETS_TO_DO
           status_code = 0
           while status_code == 0:
-            market_ids, status_code = Products._rewe_batches()
-            products, markets_with_product_ids, product_descriptions = getattr(discounts, market).get_products(market_ids)
+            market_ids, status_code = Products._batches(market_type, temp_path)
+            products, markets_with_product_ids = getattr(discounts, market).get_products(market_ids)
             if products == None or markets_with_product_ids == None:
               continue
             store_products(products, PRODUCT_DB_PATH)
             store_markets_with_product_ids(markets_with_product_ids, MARKET_PRODUCTS_DB_PATH)
-            if product_descriptions != None and len(product_descriptions) != 0:
-              con = sqlite3.connect(REWE_DISCOUNTS_TEMP_DESCRIPTIONS)
-              cur = con.cursor()
-              cur.execute("CREATE TABLE if not exists rewe_product_descriptions(id,description)")
-              cur.executemany("INSERT INTO rewe_product_descriptions VALUES(?,?)", product_descriptions)
-              con.commit()
-              cur.close()
-              con.close()
-          # Update the product descriptions for rewe products.
-          #TODO something no working, does not set the right description (maybe something to do with the AND in the UPDATE-statement)
-          if os.path.exists(REWE_DISCOUNTS_TEMP_DESCRIPTIONS):
-            con = sqlite3.connect(REWE_DISCOUNTS_TEMP_DESCRIPTIONS)
-            con_product = sqlite3.connect(PRODUCT_DB_PATH)
-            cur = con.cursor()
-            cur.execute("SELECT DISTINCT id FROM rewe_product_descriptions")
-            distinct_product_ids = cur.fetchall()
-            cur.close()
-            distinct_product_ids = [id[0] for id in distinct_product_ids]
-            for id in distinct_product_ids:
-              cur = con.cursor()
-              cur.execute(f"SELECT description FROM rewe_product_descriptions WHERE id='{id}'")
-              descriptions = cur.fetchall()
-              cur.close()
-              descriptions = [description[0] for description in descriptions]
-              # Just get the longest description and keep the table for now.
-              new_description = descriptions.sort(key=lambda x: len(x))[-1]
-              cur_product = con_product.cursor()
-              cur_product.execute(f"UPDATE products SET description='{new_description}' WHERE unique_id='{id}' AND market_type='rewe'")
-              con.commit()
-              cur_product.close()
-            con_product.close()
-            con.close()
-            #os.remove(REWE_DISCOUNTS_TEMP_DESCRIPTIONS)  #TODO analyse the descriptions and than uncomment this line
         # access markets-table to get all hit market ids
+        # TODO: integrate "hit" into "penny"/"norma"
         case "hit":
           hit_market_ids = get_market_ids(market_type, MARKET_DB_PATH)
           if hit_market_ids == None or len(hit_market_ids) == 0:
@@ -337,10 +311,12 @@ class Products:
           store_products(products, PRODUCT_DB_PATH)
           store_markets_with_product_ids(markets_with_product_ids, MARKET_PRODUCTS_DB_PATH)
         # access market_extra table to get selling regions
-        case "penny":
-          selling_regions = get_group_ids(market_type, MARKET_EXTRA_DB_PATH)
+        case "penny" | "norma":
+          now = localtime()
+          week_start, _ = set_week_start_and_end(now)
+          selling_regions = get_group_ids(market_type, week_start, SELLING_REGION_MARKETS_DB_PATH)
           if selling_regions == None or len(selling_regions) == 0:
-            logger.warning("No Penny selling regions in market-extra-table.")
+            logger.warning("No selling regions for %s in market-extra-table.", market_type)
             continue
           products, selling_regions_with_product_ids = getattr(discounts, market).get_products(selling_regions)
           if products == None or selling_regions_with_product_ids == None:
@@ -354,14 +330,7 @@ class Products:
           store_products(products, PRODUCT_DB_PATH)
       logger.info("%s - product retrieval successful", market_type)
     
-  def post_processing():
-    """Penny and Hit have a problem:
-    Some products are nearly identical, except the price_before and the id and the link.
-    To filter those out we need to create a mapping to only one of those row-entries (e.g. id-based)
-      and than uses this mapping on the market_products.db.
-    """
-    pass  # TODO
 
 if __name__ == "__main__":
-  Markets.create_market_db()
-  Products.create_product_db()
+  Markets.create_market_db(["Norma"])
+  # Products.create_product_db(["Netto"])

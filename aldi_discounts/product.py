@@ -1,6 +1,7 @@
 
 import os
 import sqlite3
+from hashlib import md5
 from datetime import date
 from dataclasses import dataclass, asdict
 
@@ -14,7 +15,7 @@ class Product:
   ** rewe uses the same 'unique_id' for products with different prices 
      (some regions/market_ids have a cheaper price)
      - so unique_id_internal for rewe is build the following way:
-       unique_id + price (without the seperator), e.g. '1359460' + '1399' => '13594601399'
+       unique_id + cust_hash(...) (without a seperator), e.g. '1359460' + '...' => '1359460...'
      - for every other market type (that does not need this) it's just the same as unique_id
   """
   market_type: str = None
@@ -43,7 +44,7 @@ class Product:
   
   @staticmethod
   def primary_key():
-    return "name, price, market_type, valid_from, valid_to, unique_id_internal"  # "name, price, market_type, valid_from, valid_to"
+    return "name, price, market_type, valid_from, valid_to, unique_id_internal"
 
   def __eq__(self, other):
     if not isinstance(other, Product):
@@ -89,6 +90,10 @@ def products_present(market_type: str, week_start: date, path: str, *, light_che
     # TODO Check how many products are present
     return None
   
+def cust_hash(values: list[str|int|float]) -> str:
+  """md5"""
+  values = "".join([str(value) for value in values if value != None])
+  return md5(values.encode(), usedforsecurity=False).hexdigest()
   
 
 def is_valid_product(product: Product) -> Product | None:

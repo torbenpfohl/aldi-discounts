@@ -38,11 +38,11 @@ makes a lot of assumptions regarding the structur of the returned and parsed web
 ## Code Structur
 - main.py does all the main database work.
 - marketlists.py mostly calls the endpoints (rewe owns a key- and a pem-file for authentication)
-  - every market-class exposes a method get_markets() which returns markets (or at least an empty list) or - if something went wrong and we should abort this market-retrieval - it returns None
+  - every market-class exposes a method **get_markets()** which returns markets (or at least an empty list) or - if something went wrong and we should abort this market-retrieval - it returns None
   - every market-class owns a logger (e.g. marketlists.Penny), that _can_ propagate its messages to the marketlists-logger
-- discounts.py SHOULD also mostly call the endpoints (same auth stuff needed)
-- market_products.py, market.py, product.py, market_extra.py are all data-classes that also have some storage-functions
-- util.py for useful functions
+- discounts.py SHOULD also mostly call the endpoints (same auth stuff needed), it exposes a function **get_products()** which takes ___nothing___ or one or multiple ___market id___(s) - or a ___selling region___ in some cases - and returns the products for that market/ selling region
+- market_products.py, market.py, product.py, market_extra.py are all dataclasses that also have some storage-functions
+- util.py for useful/necessary functions
 
 
 ## Data Structur

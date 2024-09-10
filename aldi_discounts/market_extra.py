@@ -14,7 +14,6 @@ market_extra_tablename = "market_extra"
 class Market_Extra:
   id: str = None
   type: str = None
-  group_id: str = None  # e.g. penny selling region
   self_checkout: bool = None
   renovation_start: date = None
   reopen: date = None
@@ -51,15 +50,3 @@ def store(markets_extra: list[Market_Extra], path: str):
   con.commit()
   cur.close()
   con.close()
-
-def get_group_ids(market_type: str, path: str) -> list[str]:
-  if not os.path.exists(path):
-    return None
-  con = sqlite3.connect(path)
-  cur = con.cursor()
-  cur.execute(f"SELECT DISTINCT group_id FROM {market_extra_tablename} where type='{market_type}'")
-  ids = cur.fetchall()
-  ids = [id[0] for id in ids]
-  cur.close()
-  con.close()
-  return ids

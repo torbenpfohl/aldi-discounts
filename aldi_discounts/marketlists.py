@@ -12,9 +12,10 @@ from bs4 import BeautifulSoup
 
 from market import Market
 from market_extra import Market_Extra
-from util import delay_range, get_rewe_creds, setup_logger
+from group_id_markets import Group_id_Markets
+from util import delay_range, get_rewe_creds, setup_logger, set_week_start_and_end
 
-__all__ = ["Aldi_sued", "Aldi_nord", "Hit", "Penny", "Rewe"]
+__all__ = ["Aldi_sued", "Aldi_nord", "Hit", "Penny", "Rewe", "Netto", "Norma"]
 
 # TODO add extra markets infos
 # and e.g. for aldi sued: "Parkplatz", "Meine Backwelt", "E-Tankstelle", "SelfCheckout", "Coffee To Go"
@@ -340,30 +341,64 @@ class Penny:
       if raw_data == None:
         return None
     markets_extra: list[Market_Extra] = list()
-    for market_extra_raw in raw_data:
-      id = selling_region = None
-      if not ((id := market_extra_raw.get("wwIdent")) and (selling_region := market_extra_raw.get("sellingRegion"))):
-        Penny.LOGGER.warning("Penny: Problem with getting id=%s and selling_region=%s in market extra.",
-                       id, selling_region)
+    for raw_data_line in raw_data:
+      id = None
+      if not ((id := raw_data_line.get("wwIdent"))):
+        Penny.LOGGER.warning("Penny: Problem with getting id=%s in market extra.",
+                       id)
         return None
       market_extra = Market_Extra()
       market_extra.type = Penny.TYPE
-      market_extra.id = market_extra_raw["wwIdent"]
-      market_extra.group_id = market_extra_raw["sellingRegion"]
+      market_extra.id = raw_data_line["wwIdent"]
       # TODO opening times etc.
       now = localtime()
       market_extra.last_update = date(now.tm_year, now.tm_mon, now.tm_mday)
       markets_extra.append(market_extra)
-    
-    return markets_extra
 
+    return markets_extra
+  
   @staticmethod
-  def get_markets(extras: bool = True, *, loglevel: str = "DEBUG", one_logger_file: bool = True, logger_file_mode: str = "w") -> list[Market]:
+  def get_selling_regions_with_markets(raw_data = None) -> list[Group_id_Markets]:
+    now = localtime()
+    week_start, week_end = set_week_start_and_end(now)
+    if raw_data == None:
+      raw_data = Penny.get_raw()
+      if raw_data == None:
+        return None
+    group_ids_with_markets_tmp: dict[str, list[str]] = dict()
+    for raw_data_line in raw_data:
+      id = selling_region = None
+      if not ((id := raw_data_line.get("wwIdent")) and (selling_region := raw_data_line.get("sellingRegion"))):
+        Penny.LOGGER.warning("Penny: Problem with getting id=%s and selling_region=%s in market extra.",
+                       id, selling_region)
+        return None
+      if group_ids_with_markets_tmp.get(selling_region):
+        group_ids_with_markets_tmp[selling_region].append(id)
+      else:
+        group_ids_with_markets_tmp.update({selling_region: [id]})
+    group_ids_with_markets: list[Group_id_Markets] = list()
+    for group_id, market_ids in group_ids_with_markets_tmp.items():
+      group_id_with_markets = Group_id_Markets()
+      group_id_with_markets.market_type = Penny.TYPE
+      group_id_with_markets.week_start = week_start
+      group_id_with_markets.week_end = week_end
+      group_id_with_markets.group_id = group_id
+      group_id_with_markets.markets = ",".join(market_ids)
+      group_id_with_markets.last_update = date(now.tm_year, now.tm_mon, now.tm_mday)
+      group_ids_with_markets.append(group_id_with_markets)
+
+    return group_ids_with_markets
+      
+  @staticmethod
+  def get_markets(*, extras: bool = False, loglevel: str = "DEBUG", one_logger_file: bool = True, logger_file_mode: str = "w") -> list[Market] | tuple[list[Market], list[Market_Extra], list[Group_id_Markets]]:
     Penny.LOGGER = setup_logger(SOURCE_PATH, __name__, Penny.TYPE, loglevel, one_logger_file, logger_file_mode)
 
     markets_raw = Penny.get_raw()
     if markets_raw == None:
-      return None
+      if extras:
+        return None, None
+      else:
+        return None
     markets: list[Market] = list()
     for market_raw in markets_raw:
       id = market_name = street_with_house_number = city = zip_code = latitude = longitude = None
@@ -378,7 +413,10 @@ class Penny:
                        \nwwIdent=%s, marketName=%s, streetWithHouseNumber=%s, city=%s, zipCode=%s, latitude=%s, longitude=%s \
                        \noriginal data: %s", 
                        id, market_name, street_with_house_number, city, zip_code, latitude, longitude, market_raw)
-        return None
+        if extras:
+          return None, None
+        else:
+          return None
       market = Market()
       market.id = market_raw["wwIdent"]
       market.type = Penny.TYPE
@@ -394,7 +432,8 @@ class Penny:
     
     if extras:
       markets_extra = Penny.get_markets_extra(markets_raw)
-      return markets, markets_extra
+      selling_regions_with_markets = Penny.get_selling_regions_with_markets(markets_raw)
+      return markets, markets_extra, selling_regions_with_markets
     else:
       return markets
 
@@ -609,6 +648,243 @@ class Hit:
 
     return markets
       
+
+class Netto:
+  TYPE = "netto"
+  LOGGER = None
+  
+  @staticmethod
+  def get_raw():
+    url = "https://www.netto-online.de/api/stores/search_stores?latitude=51.446935927480325&longitude=10.451525151729584&dist=500.58771875&api_user=nettoapp&api_token=e6Ddd8gYybhZVTen&user_ip=91.237.117.254"
+    headers = {"user-agent": "NettoApp/7.1.2 (Build: 7.1.2.1; Android 11)"}
+    try:
+      res = Client(http1=True, timeout=30.0, headers=headers).get(url)
+    except:
+      Netto.LOGGER.warning("Problem with request to: %s", url)
+      return None
+    if res.status_code != 200:
+      Netto.LOGGER.warning("Unexpected status code %s from request to %s", res.status_code, url)
+      return None
+    try:
+      markets_raw = res.json()
+    except:
+      Netto.LOGGER.warning("Couldn't parse %s to a json", url)
+      return None
+    if ((data := markets_raw.get("data")) != None) and (len(data) != 0):
+      return data
+    else:
+      Netto.LOGGER.warning("No 'data' in request %s", url)
+      return None
+ 
+  @staticmethod
+  def get_markets_extra(raw_data = None) -> list[Market_Extra]:
+    if raw_data == None:
+      raw_data = Netto.get_raw()
+      if raw_data == None:
+        return None
+    markets_extra: list[Market_Extra] = list()
+    # TODO
+
+  @staticmethod
+  def get_markets(*, extras: bool = False, loglevel: str = "DEBUG", one_logger_file: bool = True, logger_file_mode: str = "w") -> list[Market] | tuple[list[Market], list[Market_Extra]]:
+    Netto.LOGGER = setup_logger(SOURCE_PATH, __name__, Netto.TYPE, loglevel, one_logger_file, logger_file_mode)
+    markets_raw = Netto.get_raw()
+    if markets_raw == None:
+      if extras:
+        return None, None
+      else:
+        return None
+
+    markets: list[Market] = list()
+    for market_raw in markets_raw:
+      id = market_name = street_with_house_number = city = zip_code = latitude = longitude = None
+      if not ((id := market_raw.get("store_id"))
+              and (market_name := market_raw.get("store_name"))
+              and (street_with_house_number := market_raw.get("street"))
+              and (city := market_raw.get("city"))
+              and (zip_code := market_raw.get("post_code"))
+              and (latitude := market_raw.get("coord_latitude"))
+              and (longitude := market_raw.get("coord_longitude"))):
+        Netto.LOGGER.warning("Problem with parsing the market: \
+                       \nwwIdent=%s, marketName=%s, streetWithHouseNumber=%s, city=%s, zipCode=%s, latitude=%s, longitude=%s \
+                       \noriginal data: %s", 
+                       id, market_name, street_with_house_number, city, zip_code, latitude, longitude, market_raw)
+        return None
+      market = Market()
+      market.id = id
+      market.type = Netto.TYPE
+      market.name = market_name
+      market.address = street_with_house_number
+      market.city = city
+      market.postal_code = zip_code
+      market.latitude = latitude
+      market.longitude = longitude
+      now = localtime()
+      market.last_update = date(now.tm_year, now.tm_mon, now.tm_mday)
+      markets.append(market)
+
+    if extras:
+      markets_extra = Netto.get_markets_extra(markets_raw)
+      return markets, markets_extra
+    else:
+      return markets
+
+
+class Norma:
+  TYPE = "norma"
+  LOGGER = None
+  GROUP_IDS_WITH_MARKETS_TMP: dict[str, list[str]] = dict()
+  
+  @staticmethod
+  def get_raw():
+    url_all_markets = "https://www.norma-online.de/ext/vendors/maplibre/norma.geojson"
+    try:
+      res = Client(http1=True).get(url_all_markets)
+    except:
+      Norma.LOGGER.warning("Problem with request to: %s", url_all_markets)
+      return None
+    if res.status_code != 200:
+      Norma.LOGGER.warning("Unexpected status code %s from request to %s", res.status_code, url_all_markets)
+      return None
+    try:
+      markets_raw = res.json()
+    except:
+      Norma.LOGGER.warning("Couldn't parse %s to a json", url_all_markets)
+      return None
+    if ((data := markets_raw.get("features")) != None) and (len(data) != 0):
+      return data
+    else:
+      Norma.LOGGER.warning("No 'data' in request %s", url_all_markets)
+      return None
+    
+  @staticmethod
+  @delay_range(3000, 6000)
+  def get_raw_extras(latitude, longitude):
+    """Returns a list of markets with extra data for each market - like opening hours and the region key."""
+    url = f"https://www.norma-online.de/ws/?controller=Norma_Location&action=getPoisForLatLongV2&lat={latitude}&long={longitude}&radius=50000&sRegioKey=0"
+    headers = {"authorization": "Basic d3NhcGk6YWhmaWV4b2gzRWVjaGllN3NpR2g="}
+    try:
+      res = Client(http1=True, headers=headers).get(url)
+    except:
+      Norma.LOGGER.warning("Problem with request to: %s", url)
+      return None
+    if res.status_code != 200:
+      Norma.LOGGER.warning("Unexpected status code %s from request to %s", res.status_code, url)
+      return None
+    try:
+      markets_raw = res.json()
+    except:
+      Norma.LOGGER.warning("Couldn't parse %s to a json", url)
+      return None
+    if ((data := markets_raw.get("data")) != None) and (len(data) != 0):
+      return data
+    else:
+      Norma.LOGGER.warning("No 'data' in request %s", url)
+  
+  @staticmethod
+  def get_regio_key_with_market(markets: list[Market], now) -> dict[str, list[str]]:
+    group_ids_with_markets_temp: dict[str, set[str]] = dict()
+    while len(markets) != 0:
+      market_ids_processed = list()
+      market = random.choice(markets)
+      latitude = market.latitude
+      longitude = market.longitude
+      id = market.id
+      raw_data = Norma.get_raw_extras(latitude, longitude)
+      if raw_data == None:
+        continue
+      request_market_not_relevant = True  # At the moment Austrian and Czech-markets are not accessable through this api-endpoint. (77 markets at the last run, 08.09.2024)
+                                          #TODO hook the app again
+      for raw_market in raw_data:
+        market_id = regio_key = None
+        if not ((market_id := raw_market.get("fmsLocationId")) and (regio_key := raw_market.get("fmsRegioKey"))):
+          Norma.LOGGER.warning("Problem with getting market_id=%s and regio_key=%s.",
+                              market_id, regio_key)
+          continue
+        if group_ids_with_markets_temp.get(regio_key):
+          group_ids_with_markets_temp[regio_key].add(market_id)
+        else:
+          group_ids_with_markets_temp.update({regio_key: {market_id}})
+        market_ids_processed.append(market_id)
+        if (geo_coords := raw_market.get("geoCoordinate")) and (geo_coords.get("latitude") == latitude) and (geo_coords.get("longitude") == longitude):
+          request_market_not_relevant = False
+      if request_market_not_relevant:
+        market_ids_processed.append(id)
+      markets = [m for m in markets if m.id not in market_ids_processed]      
+      
+    week_start, week_end = set_week_start_and_end(now)
+    group_ids_with_markets: list[Group_id_Markets] = list()
+    for group_id, market_ids in group_ids_with_markets_temp.items():
+      group_id_with_markets = Group_id_Markets()
+      group_id_with_markets.market_type = Norma.TYPE
+      group_id_with_markets.week_start = week_start
+      group_id_with_markets.week_end = week_end
+      group_id_with_markets.group_id = group_id
+      group_id_with_markets.markets = ",".join(market_ids)
+      group_id_with_markets.last_update = date(now.tm_year, now.tm_mon, now.tm_mday)
+      group_ids_with_markets.append(group_id_with_markets)
+    
+    return group_ids_with_markets
+    
+  
+  @staticmethod
+  def get_market_extra(latitude = None, longitude = None) -> list[Market_Extra]:
+    pass
+    # TODO
+
+  @staticmethod
+  def get_markets(*, extras: bool = False, loglevel: str = "DEBUG", one_logger_file: bool = True, logger_file_mode: str = "w") -> list[Market] | tuple[list[Market], list[Market_Extra], list[Group_id_Markets]]:
+    Norma.LOGGER = setup_logger(SOURCE_PATH, __name__, Norma.TYPE, loglevel, one_logger_file, logger_file_mode)
+    
+    markets: list[Market] = list()
+    basic_market_data = Norma.get_raw()
+    for basic_market in basic_market_data:
+      id = street = house_number = city = zip_code = latitude = longitude = None
+      if not ((properties := basic_market.get("properties"))
+              and (id := properties.get("id"))
+              and (street := properties.get("street"))
+              and (city := properties.get("city"))
+              and (zip_code := properties.get("zip"))
+              and (geometry := basic_market.get("geometry"))
+              and (coordinates := geometry.get("coordinates"))
+              and (latitude := coordinates[1])
+              and (longitude := coordinates[0])):
+        Norma.LOGGER.warning("Problem with parsing the market: \
+                       \nid=%s, street=%s, city=%s, zip=%s, latitude=%s, longitude=%s \
+                       \noriginal data: %s", 
+                       id, street, city, zip_code, latitude, longitude, basic_market)
+        if extras:
+          return None, None, None
+        else:
+          return None
+      market = Market()
+      market.name = "Norma"
+      market.type = Norma.TYPE
+      market.id = id.lstrip("N0")
+      if (house_number := properties.get("number")):
+        market.address = " ".join([street, house_number])
+      else:
+        market.address = street
+      market.city = city
+      market.postal_code = zip_code
+      market.latitude = latitude
+      market.longitude = longitude
+      now = localtime()
+      market.last_update = date(now.tm_year, now.tm_mon, now.tm_mday)
+      markets.append(market)
+      
+    if extras:
+      markets_extra: list[Market_Extra] = list()
+      group_ids_with_markets = Norma.get_regio_key_with_market(markets, now)
+      # market_extra = Norma.get_market_extra(...)
+      
+      return markets, markets_extra, group_ids_with_markets
+    else:
+      return markets
+      
+      
+  
+
 
 class Nahkauf:
   """urls

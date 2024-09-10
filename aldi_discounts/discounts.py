@@ -2,8 +2,8 @@ import os
 import re
 import uuid
 import json
-import sqlite3
 import logging
+from copy import copy
 from pathlib import Path
 from time import localtime
 from datetime import date, timedelta, datetime, timezone
@@ -11,13 +11,15 @@ from datetime import date, timedelta, datetime, timezone
 from httpx import Client
 from bs4 import BeautifulSoup, element
 
-from product import Product, is_valid_product
+from product import Product, is_valid_product, cust_hash
 from product import store as store_product
 from market import get_market_ids
 from market_products import Market_Products
 from market_products import get_all_ids as get_market_ids_market_products
 from market_products import store_multiple as store_multiple_market_products
 from util import delay_range, get_rewe_creds, set_week_start_and_end, setup_logger
+
+__all__ = ["Aldi_sued", "Aldi_nord", "Hit", "Penny", "Rewe", "Netto"]
 
 LOG_PATH_FOLDERNAME = "log"
 DATA_PATH_FOLDERNAME = "data"
@@ -735,7 +737,9 @@ class Penny:
               else:
                 logger.debug("Penny: no title for product in category %s in %s", category.get("title"), url)
               if product_raw.get("price") != None:
-                product.price = product_raw["price"].removesuffix("*")
+                product.price = product_raw["price"].removesuffix("*").removeprefix("je").strip()
+                if product.price.endswith(".-"):  # e.g. 10.-  =>  10.00
+                  product.price = product.price.removesuffix(".-") + ".00"
               else:
                 logger.debug("Penny: no price for product in category %s in %s", category.get("title"), url)
               product.valid_from = valid_from
@@ -750,7 +754,9 @@ class Penny:
               else:
                 logger.debug("Penny: no link for product in category %s in %s", category.get("title"), url)
               if product_raw.get("originalPrice") != None:
-                product.price_before = product_raw["originalPrice"]
+                product.price_before = product_raw["originalPrice"].strip()
+                if product.price.endswith(".-"):  # e.g. 10.-  =>  10.00
+                  product.price_before = product.price_before.removesuffix(".-") + ".00"
               else:
                 logger.debug("Penny: no original price for product in category %s in %s", category.get("title"), url)
               if product_raw.get("showOnlyWithTheAppBadge"):
@@ -917,23 +923,22 @@ class Rewe:
 
 
   @staticmethod
-  def get_products_with_market_id(market_id: str) -> tuple[list[Product], list[str], list[tuple[str, str]]]:
+  def get_products_with_market_id(market_id: str) -> tuple[list[Product], list[str]]:
     
     raw_products = Rewe.get_raw(market_id)
     if raw_products == None:
       logger.warning("Rewe: problem with raw-data retrieval.")
-      return None, None, None
+      return None, None
 
     all_products = list()
     all_product_ids = list()
-    product_descriptions: list[tuple[str, str]] = list()
     # valid_to # TODO
     valid_to = localtime(raw_products["untilDate"] / 1000)
     valid_to = date(valid_to.tm_year, valid_to.tm_mon, valid_to.tm_mday)
-    if valid_to.weekday() == 6:  # sunday -> saturday for consistency; fyi indicates the market is open on sundays.
-      valid_to -= timedelta(days=1)
+    #if valid_to.weekday() == 6:  # sunday -> saturday for consistency; fyi indicates the market is open on sundays. # undo: respect the data!!
+    #  valid_to -= timedelta(days=1)
     valid_from = valid_to - timedelta(days=valid_to.weekday())
-    # valid_to is set to saturday and for some to sunday, ie. change to setting them myself
+    # valid_to is set to saturday and for some to sunday
     for category in raw_products["categories"]:
       if re.search(r".*PAYBACK.*", category["title"]):
         continue
@@ -966,7 +971,7 @@ class Rewe:
         for line in details:
           if line.startswith("Art.-Nr."):
             # unique_id
-            product.unique_id = line.removeprefix("Art.-Nr.:").strip()
+            product.unique_id = line.removeprefix("Art.-Nr.:").strip()  
           if line.startswith("Hersteller"):
             # producer
             product.producer = line.removeprefix("Hersteller:").strip()
@@ -997,14 +1002,14 @@ class Rewe:
 
 
         # price_before, link <- missing
-        product.unique_id_internal = product.unique_id + re.sub(r"\D", "", product.price)
+        product.unique_id_internal = product.unique_id + cust_hash([product.price, 
+                                                                    product.description,
+                                                                    product.valid_to])
 
         all_products.append(product)
         all_product_ids.append(product.unique_id_internal)
-        if product.description != None:
-          product_descriptions.append((product.unique_id, product.description))
 
-    return all_products, all_product_ids, product_descriptions
+    return all_products, all_product_ids
 
 
   @staticmethod
@@ -1020,24 +1025,26 @@ class Rewe:
     
 
   @staticmethod
-  def get_products(market_ids: list[str], extras: bool = False) -> tuple[list[Product], list[Market_Products]]:
+  def get_products(market_ids: list[str] | str | int, *, extras: bool = False) -> tuple[list[Product], list[Market_Products]]:
     """"""
     if market_ids == None or len(market_ids) == 0:
       return None, None
+    elif isinstance(market_ids, str) or isinstance(market_ids, int):
+      market_ids = [str(market_ids)]
     now = localtime()
     last_update = date(now.tm_year, now.tm_mon, now.tm_mday)
     week_start, week_end = set_week_start_and_end(now)
     all_products: set[Product] = set()
     market_ids_with_product_ids: list[Market_Products] = list()
     for market_id in market_ids:
-      products, product_ids, product_descriptions = Rewe.get_products_with_market_id(market_id, week_start, week_end)
+      products, product_ids = Rewe.get_products_with_market_id(market_id, week_start, week_end)
       all_products.update(set(products))
       market_ids_with_product_ids.append(Market_Products(market_type=Rewe.TYPE, id=market_id, product_ids=list(set(product_ids)), week_start=week_start, week_end=week_end, last_update=last_update))
     all_products = list(all_products)
     if extras:
       all_products = list(map(Rewe.get_product_details, all_products))
 
-    return all_products, market_ids_with_product_ids, product_descriptions
+    return all_products, market_ids_with_product_ids
 
 
 class Hit:
@@ -1173,16 +1180,468 @@ class Hit:
     return all_products, market_ids_with_product_ids
       
 
+class Netto:
+  
+  TYPE = "netto"
+  PRODUCER_MAPPING = None
+
+  @staticmethod
+  @delay_range()
+  def get_producer_mapping() -> dict[str, str]:
+    hard_coded_brands = {
+      "backstube": "Backstube (Marktbäckerei)",
+      "gut ponholz": "Gut Ponholz",
+      "hofmaier": "Hofmaier",
+      "wolf echt gute wurst": "Wolf - echt gute Wurst",
+    }
+    url = "https://www.netto-online.de/marken"
+    headers = {"user-agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36",
+               "host": "www.netto-online.de"}
+    res = Client(http2=True, headers=headers).get(url)
+    if res.status_code != 200:
+      return None
+    parsed = BeautifulSoup(res.text, "html.parser")
+    brands_raw = parsed.find_all("a", class_="brand-link")
+    brands = hard_coded_brands
+    for brand_raw in brands_raw:
+      key = brand_raw.get("href")
+      key = key.split("/")[-1]
+      key = key.replace("-", " ").replace("_", " ").lower().removesuffix("-")
+      value = brand_raw.get_text()
+      brands.update({key: value})
+    
+    return brands
+
+
+  @staticmethod
+  @delay_range()
+  def get_raw(market_id: str):
+    url = "https://www.clickforbrand.de/offers-qa/rest/v1/offers?store_id=" + market_id
+    headers = {
+      "user-agent": "NettoApp/7.1.2 (Build: 7.1.2.1; Android 11)",
+      "x-netto-api-key": "78b72bf5-3229-4972-88df-486bcf6191bb",
+    }
+    try:
+      res = Client(http1=True, headers=headers).get(url)
+    except:
+      # TODO: LOGGER! wie in marketlists
+      return None
+    if res.status_code != 200:
+      # Logger
+      return None
+    try:
+      discounts_raw = res.json()
+    except:
+      # Logger
+      return None
+    if ((data := discounts_raw.get("data")) != None) and (len(data) != 0):
+      return data
+    else:
+      # logger
+      return None
+
+  @staticmethod
+  def get_products_with_market_id(market_id: str) -> tuple[set[Product], set[str]]:
+    if Netto.PRODUCER_MAPPING == None:
+      Netto.PRODUCER_MAPPING = Netto.get_producer_mapping()
+    products_raw = Netto.get_raw(market_id)
+    all_products = set()
+    all_product_ids = set()
+    for category in products_raw:
+      valid_from = valid_to = articles = None
+      if not ((valid_from := category.get("offer_date_valid_from")) 
+              and (valid_to := category.get("offer_date_valid_to"))
+              and (articles := category.get("article"))):
+        # logger
+        continue
+      # convert valid_to and valid_from
+      date_format = "%Y-%m-%d %H:%M:%S"
+      valid_from = datetime.strptime(valid_from, date_format)
+      valid_from = date(valid_from.year, valid_from.month, valid_from.day)
+      valid_to = datetime.strptime(valid_to, date_format)
+      valid_to = date(valid_to.year, valid_to.month, valid_to.day)
+      for article in articles:
+        is_online = article.get("isOnline")
+        if is_online == "true":
+          continue
+        if not ((name := article.get("title"))
+                and (price_raw := article.get("price"))
+                and (price := price_raw.get("price"))
+                and (id := article.get("artikelID"))):
+          # logger
+          continue
+        product = Product()
+        product.market_type = Netto.TYPE
+        product.valid_from = valid_from
+        product.valid_to = valid_to
+        product.name = name
+        product.unique_id = id
+        price = price.removesuffix("*")
+        if price.endswith(".-"):
+          product.price = price.removesuffix(".-") + ".00"
+        else:
+          product.price = price
+        if (quantity := article.get("text_gebinde")) == "":
+          product.quantity = "Stück"  # TODO: check this!
+        else:
+          product.quantity = quantity
+        if (base_price_raw := article.get("hp_grundpreis")) != "":
+          base_price_raw = base_price_raw.split("/")
+          if len(base_price_raw) >= 2:
+            base_price = base_price_raw[:-1]
+            base_price = "/".join(base_price)
+            base_price_unit = base_price_raw[-1]
+          else:
+            pass # logger
+          base_price = base_price.strip()
+          if base_price.endswith(".-"):
+            product.base_price = base_price.removesuffix(".-") + ".00"
+          else:
+            product.base_price = base_price
+          product.base_price_unit = base_price_unit.strip()
+        if (price_before := price_raw.get("save_price")) != "":
+          if (price_before_match := re.search(r"\d+", price_before)) != None and (price_before_match.group() != ""):
+            price_before = price_before.strip().removeprefix("UVP").removeprefix("statt").strip()
+            if price_before.endswith(".-"):
+              product.price_before = price_before.removesuffix(".-") + ".00"
+            else:
+              product.price_before = price_before
+            
+        # extract information in disturber-values
+        for key, value in article.items():
+          if key.startswith("disturber") and value != None:
+            # origin
+            if value.get("type") == "pin_regionales_aus":
+              origin_city = value.get("text")
+              if product.origin:
+                product.origin = ", ".join([origin_city, product.origin])
+              else:
+                product.origin = ", ".join([origin_city, "Deutschland"])
+              continue
+
+            if (img := value.get("img")):
+              img_filename = img.split("/")[-1]  # extract filename
+              img_filename = ".".join(img_filename.split(".")[:-1])  # remove file-format
+              img_filename = img_filename.replace("-", " ").replace("_", " ").lower().removesuffix("-")
+              
+              # producer
+              if Netto.PRODUCER_MAPPING != None and product.producer == None:
+                img_filename_parts = img_filename.split()
+                for start in range(0, len(img_filename_parts)):
+                  for end in range(len(img_filename_parts), start, -1):
+                    partial_img_filename = " ".join(img_filename_parts[start:end])
+                    producer = Netto.PRODUCER_MAPPING.get(partial_img_filename)
+                    if producer != None:
+                      product.producer = producer
+                      print(product)
+                      break
+                  if product.producer != None:
+                    break
+              # origin
+              if product.origin:
+                continue
+              else:
+                origin_raw = re.search(r"(deutschlandfahne|ehfe logo)", img_filename)
+                if origin_raw:
+                  product.origin = "Deutschland"
+
+        description = article.get("description_short").replace("<br />", ", ")
+        if (description_extra := article.get("text_pfand")):                        # (Flaschen-)Pfand-Information
+          description = ", ".join([description, description_extra])
+        if (description_extra := article.get("text_more_info")):
+          description = ", ".join([description, description_extra])
+        product.description = description
+        product.unique_id_internal = product.unique_id + cust_hash([product.price])
+
+        # Check for app_deal
+        begin_app_deal_text = re.search(r"<strong>", description)
+        netto_app_preis_marker = re.search(r"Netto-App-Preis", description)
+        end_app_deal_text = re.search(r"</strong>", description)
+        if begin_app_deal_text and end_app_deal_text and netto_app_preis_marker:
+          begin_disclaimer_text = re.search(r"<em>", description)
+          end_disclaimer_text = re.search(r"</em>", description)
+          if begin_disclaimer_text and end_disclaimer_text:
+            begin_disclaimer_text = begin_disclaimer_text.start()
+            end_disclaimer_text = end_disclaimer_text.end()
+            if end_disclaimer_text == len(description):
+              description = description[:begin_disclaimer_text]
+            else:
+              description = description[:begin_disclaimer_text] + ", " + description[end_disclaimer_text:]
+            description = description.strip(", ")
+          begin_app_deal_text = begin_app_deal_text.start()
+          end_app_deal_text = end_app_deal_text.end()
+          app_deal_text = description[begin_app_deal_text:end_app_deal_text]
+          if end_app_deal_text == len(description):
+            description = description[:begin_app_deal_text]
+          else:
+            description = description[:begin_app_deal_text] + ", " + description[end_app_deal_text:]
+          description = description.strip(", ")
+          app_deal_text = BeautifulSoup(app_deal_text, "html.parser")
+          app_deal_text = app_deal_text.get_text()
+          app_deal_base_price_raw = re.search(r"\((.*/.*)\)", app_deal_text)
+          app_deal_base_price = None
+          if app_deal_base_price_raw:
+            app_deal_base_price, _ = app_deal_base_price_raw.group(1).split("/")
+            app_deal_base_price = app_deal_base_price.strip()
+            app_deal_text = app_deal_text.replace(app_deal_base_price, "")
+          app_deal_price_raw = re.search(r"\d\.(-|\d*)", app_deal_text)
+          if app_deal_price_raw:
+            app_deal_price = app_deal_price_raw.group().removesuffix("*")
+          product.description = description
+          product_app_deal = copy(product)
+          product_app_deal.base_price = app_deal_base_price
+          if app_deal_price.endswith(".-"):
+            product_app_deal.price = app_deal_price.removesuffix(".-") + ".00"
+          else:
+            product_app_deal.price = app_deal_price
+          product_app_deal.unique_id_internal = product_app_deal.unique_id + cust_hash([product_app_deal.price])
+          product_app_deal.app_deal = True
+          product.app_deal = False
+          all_products.add(product_app_deal)
+          all_product_ids.add(product_app_deal.unique_id_internal)
+        
+        all_products.add(product)
+        all_product_ids.add(product.unique_id_internal)
+    
+    if len(all_products) == 0:
+      return None, None
+    else:
+      return all_products, all_product_ids
+
+
+  @staticmethod
+  def get_products(market_ids: list[str] | str | int) -> tuple[list[Product], list[Market_Products]]:
+    if market_ids == None or len(market_ids) == 0:
+      return None, None
+    elif isinstance(market_ids, str) or isinstance(market_ids, int):
+      market_ids = [str(market_ids)]
+    now = localtime()
+    last_update = date(now.tm_year, now.tm_mon, now.tm_mday)
+    week_start, week_end = set_week_start_and_end(now)
+    all_products: set[Product] = set()
+    market_ids_with_product_ids: list[Market_Products] = list()
+    for market_id in market_ids:
+      products, product_ids = Netto.get_products_with_market_id(market_id)
+      if products != None and product_ids != None:
+        all_products.update(products)
+        market_ids_with_product_ids.append(Market_Products(market_type=Netto.TYPE,
+                                                           id=market_id,
+                                                           product_ids=list(product_ids),
+                                                           week_start=week_start,
+                                                           week_end=week_end,
+                                                           last_update=last_update))
+    all_products = list(all_products)
+
+
+    return all_products, market_ids_with_product_ids
+    
+    
+class Norma:
+  TYPE = "norma"
+  
+  @staticmethod
+  def _parse_price(price_raw: str) -> str:
+    price_raw = price_raw.replace(",", ".")
+    if price_raw.startswith("-."):
+      price = "0" + price_raw.removeprefix("-")
+    elif price_raw.endswith(".-"):
+      price = price_raw.removesuffix("-") + "00"
+    else:
+      price = price_raw
+    return price
+  
+  @staticmethod
+  def _parse_date(text: str, current_year = None) -> date:
+    if text == None:
+      return None
+    if (match := re.search(r"\d{2}\.\d{2}\.\d{2,4}", text)):
+      day, month, year = match.group().split(".")
+      day = int(day)
+      month = int(month)
+      year = int(year)
+      today = date(year, month, day)
+    elif (match := re.search(r"(\d{2}\.\d{2})\.", text)):
+      day, month = match.group(1).split(".")
+      day = int(day)
+      month = int(month)
+      today = date(current_year, month, day)
+    else:
+      today = None
+    return today
+  
+  @staticmethod
+  def _is_current_week(text: str, now = None) -> bool:
+    """Parse txtSubline, txtTermin on the start-page and check."""
+    if now == None:
+      now = localtime()
+    week_start, week_end = set_week_start_and_end(now)
+    today = Norma._parse_date(text, now.tm_year)
+    if today == None:
+      return True
+    if week_start <= today and week_end >= today:
+      return True
+    else:
+      return False
+  
+  @staticmethod
+  @delay_range(2000,6000)
+  def get_raw(url: str):
+    headers = {
+      "authorization": "Basic d3NhcGk6YWhmaWV4b2gzRWVjaGllN3NpR2g="
+    }
+    try:
+      res = Client(http1=True, headers=headers).get(url)
+    except:
+      # TODO: LOGGER! wie in marketlists
+      return None
+    if res.status_code != 200:
+      # Logger
+      return None
+    try:
+      raw_data = res.json()
+    except:
+      # Logger
+      return None
+    if ((data := raw_data.get("data")) != None) and (len(data) != 0):
+      if ((content := data.get("content")) != None) and (len(content) != 0):
+        return content
+      else:
+        # logger
+        return None
+    else:
+      # logger
+      return None
+  
+  @staticmethod
+  def get_products_with_regio_key(regio_key: str, now) -> tuple[set[Product], set[str]]:
+    week_start, week_end = set_week_start_and_end(now)
+    products: set[Product] = set()
+    product_ids: set[str] = set()
+    
+    url_main = f"https://www.norma-online.de/ws/?controller=Norma_View&action=remoteView&sRegioKey={regio_key}&sAction=home"
+    raw_data = Norma.get_raw(url_main)
+    if raw_data == None:
+      # logger
+      return None
+    urls = list()
+    for content in raw_data:
+      if content.get("type") in ["topic_grid", "slider", "generic_slider"]:
+        if content.get("content"):
+          for content_inner in content.get("content"):
+            if (url := content_inner.get("url")) and url.startswith("/") and Norma._is_current_week(content_inner.get("txtSubline"), now):
+              urls.append(url)
+        elif content.get("items"):
+          for items_inner in content.get("items"):
+            if (url := items_inner.get("url")) and url.startswith("/") and not re.search(r"pdf", url):
+              urls.append(url)
+    for url in urls:
+      if url.startswith("/catalog") and (subsite_id := re.search(r"\d+", url)):
+        url_subsite = f"https://www.norma-online.de/ws/?controller=Norma_View&action=remoteView&sRegioKey={regio_key}&sAction=catalog&isIdentifier={subsite_id.group()}"
+      elif url.startswith("/remote"):
+        action_id = url.removeprefix("/remote/")
+        url_subsite = f"https://www.norma-online.de/ws/?controller=Norma_View&action=remoteView&sRegioKey={regio_key}&sAction={action_id}"
+      else:
+        # logger (log url)
+        continue
+      print(url_subsite)
+      raw_data = Norma.get_raw(url_subsite)
+      if raw_data == None:
+        # logger
+        continue
+      for content in raw_data:
+        if content.get("type") == "product_grid":
+          if (content_inner := content.get("content")):
+            for raw_product in content_inner:
+              #parse product
+              if (valid_from_raw := raw_product.get("txtTermin")) and not Norma._is_current_week(valid_from_raw, now):
+                # logger
+                continue
+              if (is_store_offer := raw_product.get("bStore")) and is_store_offer == "false":
+                # logger
+                continue
+              if not ((id := raw_product.get("id"))
+                      and (price := raw_product.get("txtVerkaufspreis"))
+                      and (title := raw_product.get("txtArtikel"))):
+                # logger
+                continue
+              product = Product()
+              product.market_type = Norma.TYPE
+              product.name = title
+              product.price = Norma._parse_price(price)
+              product.unique_id = id
+              product.unique_id_internal = id + cust_hash([product.price])
+              if (quantity := raw_product.get("txtBezogenAuf")) and quantity != "":
+                product.quantity = quantity
+              elif (quantity := raw_product.get("txtInhaltLang")) and quantity != "":
+                product.quantity = quantity
+              if (base_price_raw := raw_product.get("txtGrundpreis")) and base_price_raw != "":
+                base_price_raw = base_price_raw.removeprefix("(").removesuffix(")")
+                base_price_unit, base_price = base_price_raw.split("=")
+                #parse base price unit
+                base_price_unit_number, base_price_unit_unit = base_price_unit.strip().split()
+                if base_price_unit_number == "1":
+                  base_price_unit = base_price_unit_unit.strip()
+                else:
+                  base_price_unit = base_price_unit.strip()
+                product.base_price_unit = base_price_unit
+                product.base_price = Norma._parse_price(base_price.strip())
+              #parse valid_from
+              if valid_from_raw and (valid_from := Norma._parse_date(valid_from_raw, now.tm_year)):
+                product.valid_from = valid_from
+              else:
+                # logger
+                product.valid_from = week_start
+              product.valid_to = week_end
+              #producer
+              if (producer := raw_product.get("txtMarke")) and producer != "":
+                product.producer = producer
+              if (price_before_raw := raw_product.get("txtInfo")) and price_before_raw != "":
+                price_before_raw = price_before_raw.lower().removeprefix("uvp").strip()
+                price_before = Norma._parse_price(price_before_raw)
+                product.price_before = price_before
+              # call productDetails-url to get the description
+              url_product = f"https://www.norma-online.de/ws/?controller=Norma_View&action=remoteView&sRegioKey={regio_key}&sAction=productDetails&isIdentifier={product.unique_id}"
+              product_details_raw = Norma.get_raw(url_product)
+              if product_details_raw != None:
+                for product_details_raw_content in product_details_raw:
+                  if product_details_raw_content.get("type") == "html_text":
+                    html = product_details_raw_content.get("html")
+                    if html == "":
+                      break
+                    parsed = BeautifulSoup(html, "html.parser")
+                    description = parsed.get_text().replace("\xa0", "").replace("\n", ", ").strip(", ")
+                    product.description = description
+                    break
+              products.add(product)
+              product_ids.add(product.unique_id_internal)
+    
+    return products, product_ids
+    
+    
+  @staticmethod
+  def get_products(regio_keys: list[str]) -> tuple[list[Product], list[Market_Products]]:
+    all_products: set[Product] = set()
+    market_ids_with_product_ids: list[Market_Products] = list()
+    now = localtime()
+    last_update = date(now.tm_year, now.tm_mon, now.tm_mday)
+    week_start, week_end = set_week_start_and_end(now)
+    for regio_key in regio_keys:
+      products, product_ids = Norma.get_products_with_regio_key(regio_key, now)
+      if products != None and product_ids != None:
+        all_products.update(products)
+        market_ids_with_product_ids.append(Market_Products(market_type=Norma.TYPE,
+                                                           id=regio_key,
+                                                           product_ids=list(product_ids),
+                                                           week_start=week_start,
+                                                           week_end=week_end,
+                                                           last_update=last_update))
+    all_products = list(all_products)
+    
+    return all_products, market_ids_with_product_ids
+    
     
 
 
 
 if __name__ == "__main__":
-  # ps, ps_ids = Rewe.get_products_with_market_id("565950")
-  # print(len(ps), len(ps_ids))
-  # print(ps_ids)
-  #Penny.get_products("./data/penny_selling_regions_with_offer_ids.db")
-  ps = Hit.get_products_with_market_id("1702", "2024-07-15")
-  for p in ps:
-    logger.info("%s", p)
   pass
