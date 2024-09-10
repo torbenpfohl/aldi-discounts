@@ -1037,7 +1037,7 @@ class Rewe:
     all_products: set[Product] = set()
     market_ids_with_product_ids: list[Market_Products] = list()
     for market_id in market_ids:
-      products, product_ids = Rewe.get_products_with_market_id(market_id, week_start, week_end)
+      products, product_ids = Rewe.get_products_with_market_id(market_id)
       all_products.update(set(products))
       market_ids_with_product_ids.append(Market_Products(market_type=Rewe.TYPE, id=market_id, product_ids=list(set(product_ids)), week_start=week_start, week_end=week_end, last_update=last_update))
     all_products = list(all_products)
